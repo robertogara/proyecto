@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: Calidad del aire
+    orgId: 1
+    folder: Calidad del aire
+    type: file
+    updateIntervalSeconds: 10
+    disableDeletion: false
+    editable: true
+    options:
+      path: /etc/grafana/provisioning/dashboards

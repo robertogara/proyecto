@@ -1,0 +1,53 @@
+services:
+  influxdb:
+    image: influxdb:1.8
+    ports:
+      - "8086:8086"
+    environment:
+      INFLUXDB_DB: calidad_aire_db
+      INFLUXDB_ADMIN_USER: root
+      INFLUXDB_ADMIN_PASSWORD: root
+      INFLUXDB_HTTP_AUTH_ENABLED: "true"
+    volumes:
+      - influxdb_data:/var/lib/influxdb
+    networks:
+      - iot-net
+
+  ingesta-ica:
+    image: python:3.12-slim
+    command: ["python", "-u", "/ingesta_ica.py"]
+    restart: unless-stopped
+    volumes:
+      - ./ingesta_ica.py:/ingesta_ica.py:ro
+    environment:
+      ICA_CSV_URL: https://ica.miteco.es/datos/ica-ultima-hora.csv
+      POLL_INTERVAL_SECONDS: "300"
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_DATABASE: calidad_aire_db
+      INFLUXDB_USERNAME: root
+      INFLUXDB_PASSWORD: root
+    depends_on:
+      - influxdb
+    networks:
+      - iot-net
+
+  grafana:
+    image: grafana/grafana:12.4.15
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana-provisioning/:/etc/grafana/provisioning
+    depends_on:
+      - influxdb
+    networks:
+      - iot-net
+
+volumes:
+  influxdb_data:
+  grafana_data:
+
+networks:
+  iot-net:
+    driver: bridge
+
