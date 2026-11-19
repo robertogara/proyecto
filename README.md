@@ -1,50 +1,94 @@
-# Calidad del aire en España
+# Calidad del aire en España: MQTT, InfluxDB y Grafana
 
-Este proyecto consulta cada cinco minutos el CSV horario oficial del Índice
-Nacional de Calidad del Aire (ICA) del MITECO y escribe los datos de las
-estaciones activas en InfluxDB 1.8. Grafana 12.4.15 aprovisiona una fuente
-InfluxDB y el dashboard con un mapa Geomap de OpenStreetMap y una tabla de
-estaciones ordenada por categoría ICA.
+Proyecto de monitorización del Índice de Calidad del Aire (ICA) en estaciones de España. El origen son los datos públicos del CSV horario del MITECO. Para cumplir la arquitectura IoT de la práctica, un publicador los envía por MQTT; Telegraf se suscribe al tópico y escribe las lecturas en InfluxDB; Grafana las consulta y visualiza.
 
-La ingesta usa la base `calidad_aire_db` y conserva los volúmenes existentes
-`influxdb_data` y `grafana_data`; no es necesario borrar ni migrar datos. Los
-servicios Mosquitto y Telegraf, así como la antigua ingesta de sismos, ya no se
-usan.
+## Arquitectura
 
-## Aplicar los cambios
+```text
+CSV público MITECO
+       |
+       v
+ingesta-ica (publicador Python)
+       |  Influx Line Protocol por MQTT
+       v
+Mosquitto: calidad-aire/estaciones
+       |
+       v
+Telegraf (mqtt_consumer + outputs.influxdb)
+       |
+       v
+InfluxDB 1.8: calidad_aire_db / ica_estaciones
+       |
+       v
+Grafana: mapa de estaciones, tabla y serie temporal
+```
 
-Desde esta carpeta, valida la configuración y levanta los servicios:
+Los servicios `mosquitto`, `telegraf`, `influxdb`, `grafana` e `ingesta-ica` están conectados a la misma red virtual de Docker Compose, `iot-net`. La fuente MITECO sustituye a los sensores físicos del ejemplo de la guía; sus datos recorren el mismo camino MQTT → Telegraf → InfluxDB → Grafana. El tópico raíz MQTT es `calidad-aire/estaciones`; cada estación publica en `calidad-aire/estaciones/<cod_estacion>`. Los mensajes retenidos usan InfluxDB Line Protocol, así Telegraf recibe la última lectura de cada estación aunque arranque unos segundos después del publicador.
 
-```shell
+## Requisitos
+
+- Docker Desktop con Docker Compose.
+- Acceso a Internet para descargar las imágenes y consultar el CSV público MITECO.
+
+## Arranque
+
+En una copia nueva del repositorio, crea el archivo local de credenciales a partir de la plantilla:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Edita `.env` con las credenciales de InfluxDB que quieras usar. El `.env` real está excluido de Git. En el proyecto original ya se conserva un `.env` local con las credenciales que corresponden al volumen existente.
+
+Valida la configuración y levanta todos los servicios:
+
+```powershell
 docker compose config
-docker compose up -d --remove-orphans
+docker compose up -d --build
 ```
 
-`--remove-orphans` retira los contenedores Mosquitto/Telegraf antiguos del
-proyecto, pero no borra los volúmenes. No ejecutes `docker compose down -v`.
+No uses `docker compose down -v`: la opción `-v` borraría los volúmenes persistentes de InfluxDB y Grafana.
 
-La ingesta hace una consulta inmediata al arrancar y después cada cinco minutos.
-Consulta su estado y registros con:
+## Comprobación
 
-```shell
+```powershell
 docker compose ps
-docker compose logs -f ingesta-ica
+docker compose logs --tail=50 ingesta-ica telegraf
 ```
 
-Grafana estará disponible en <http://localhost:3000>. Abre el dashboard
-**Calidad del aire en España** en la carpeta del mismo nombre. La fuente de
-datos aprovisionada `InfluxDB-ICA` apunta a `calidad_aire_db`.
+En los logs de `ingesta-ica` deben aparecer lecturas publicadas en `calidad-aire/estaciones`; Telegraf debe mostrar que recibe y escribe métricas. El publicador consulta el CSV al arrancar y después cada cinco minutos.
+
+- Grafana: <http://localhost:3000>
+- Dashboard aprovisionado: **Calidad del aire en España**
+- Fuente Grafana: `InfluxDB-ICA` (`influxdb-ica`)
+- Base de datos: `calidad_aire_db`
+- Medición: `ica_estaciones`
+
+Para observar un mensaje MQTT de prueba desde otra terminal:
+
+```powershell
+docker compose exec mosquitto mosquitto_sub -h localhost -t calidad-aire/estaciones/# -C 1 -v
+```
+
+El comando espera al siguiente sondeo de la ingesta y después termina.
 
 ## Datos y visualizaciones
 
-La fuente es <https://ica.miteco.es/datos/ica-ultima-hora.csv> y su diccionario
-oficial está en <https://ica.miteco.es/datos/DICCIONARIO_DE_DATOS.txt>. Se
-ignoran estaciones inactivas, índices vacíos, índice 0 y filas inválidas. La
-medición `ica_estaciones` guarda por estación las coordenadas del CSV, el
-timestamp UTC, el valor original del índice y su categoría normalizada (por
-ejemplo, `20` se conserva como `indice_original=20` y `categoria_ica=2`).
+Cada lectura válida incluye el código y nombre de estación, tipo de estación, contaminante asociado, coordenadas, categoría ICA e índice original. Las coordenadas provienen del CSV oficial. Las categorías se normalizan a 1–6; por ejemplo, un índice original de `20` se guarda como `categoria_ica=2` e `indice_original=20`.
 
-El mapa colorea las categorías 1-2 en verde, 3 en amarillo y 4-6 en rojo. Los
-detalles de cada estación incluyen nombre, tipo, categoría, contaminante
-causante y hora del dato. La tabla compara estaciones de medición individuales;
-no muestra promedios provinciales.
+El dashboard incluye el mapa de estaciones, la tabla de lecturas más desfavorables y la serie temporal de ICA. En el mapa: verde para categorías 1–2, amarillo para 3 y rojo para 4–6. Los datos se publican con la periodicidad del CSV del MITECO (horaria); el sondeo cada cinco minutos no implica que el organismo publique una medición nueva cada cinco minutos. La tabla compara estaciones individuales, no promedios provinciales.
+
+## Archivos principales
+
+- `docker-compose.yml`: servicios, puertos, red virtual y volúmenes persistentes.
+- `mosquitto/mosquitto.conf`: broker MQTT.
+- `telegraf/telegraf.conf`: suscripción MQTT y salida a InfluxDB.
+- `ingesta_ica.py`: descarga, validación y publicación de datos MITECO.
+- `grafana-provisioning/datasources/datasource.yml`: fuente InfluxDB de Grafana.
+- `grafana-provisioning/dashboards/`: dashboard aprovisionado.
+- `.env.example`: plantilla de credenciales locales; no contiene contraseñas reales.
+
+## Fuente
+
+- MITECO, CSV horario: <https://ica.miteco.es/datos/ica-ultima-hora.csv>
+- Guía de arquitectura IoT: <https://josejuansanchez.org/iot-dashboard/>

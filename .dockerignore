@@ -1,0 +1,11 @@
+.git
+.venv
+__pycache__
+*.pyc
+*.log
+.env
+README.md
+docker-compose.yml
+mosquitto
+telegraf
+grafana-provisioning

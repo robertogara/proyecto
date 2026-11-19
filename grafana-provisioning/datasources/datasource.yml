@@ -7,11 +7,11 @@ datasources:
     access: proxy
     url: http://influxdb:8086
     database: calidad_aire_db
-    user: root
+    user: $INFLUXDB_USER
     jsonData:
       version: InfluxQL
       timeInterval: 5m
     secureJsonData:
-      password: root
+      password: $INFLUXDB_PASSWORD
     isDefault: true
     editable: true
